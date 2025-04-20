@@ -1,59 +1,95 @@
 import pandas as pd
 from sklearn.preprocessing import OrdinalEncoder
+import logging
+import sys
+
+def configure_logging():
+    """Настройка логирования для отслеживания выполнения скрипта"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('data_processing.log'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
 
 def download_data():
-    df = pd.read_csv(
-        'https://raw.githubusercontent.com/dayekb/Basic_ML_Alg/main/cars_moldova_no_dup.csv', 
-        delimiter=','
-    )
-    df.to_csv("data/raw/cars.csv", index=False)
-    return df
+    """
+    Загружает данные из удаленного CSV-файла и сохраняет их локально
+    
+    Returns:
+        pd.DataFrame: Загруженный DataFrame с исходными данными
+    """
+    try:
+        logging.info("Начало загрузки данных...")
+        url = 'https://raw.githubusercontent.com/dayekb/Basic_ML_Alg/main/cars_moldova_no_dup.csv'
+        df = pd.read_csv(url, delimiter=',')
+        df.to_csv("cars.csv", index=False)
+        logging.info(f"Данные успешно загружены. Сохранено {len(df)} записей в cars.csv")
+        return df
+    except Exception as e:
+        logging.error(f"Ошибка при загрузке данных: {str(e)}")
+        raise
 
-def clear_data(path2df):
-    df = pd.read_csv(path2df)
+def clean_data(path2df):
+    """
+    Очищает и преобразует данные автомобилей
     
-    cat_columns = ['Make', 'Model', 'Style', 'Fuel_type', 'Transmission']
-    num_columns = ['Year', 'Distance', 'Engine_capacity(cm3)', 'Price(euro)']
+    Args:
+        path2df (str): Путь к CSV-файлу с исходными данными
     
-    # Очистка данных
-    question_dist = df[(df.Year < 2021) & (df.Distance < 1100)]
-    df = df.drop(question_dist.index)
-    
-    question_dist = df[(df.Distance > 1e6)]
-    df = df.drop(question_dist.index)
-    
-    question_engine = df[df["Engine_capacity(cm3)"] < 200]
-    df = df.drop(question_engine.index)
-    
-    question_engine = df[df["Engine_capacity(cm3)"] > 5000]
-    df = df.drop(question_engine.index)
-    
-    question_price = df[(df["Price(euro)"] < 101)]
-    df = df.drop(question_price.index)
-    
-    question_price = df[df["Price(euro)"] > 1e5]
-    df = df.drop(question_price.index)
-    
-    question_year = df[df.Year < 1971]
-    df = df.drop(question_year.index)
-    
-    df = df.reset_index(drop=True)
-    
-    # Кодирование категориальных признаков
-    ordinal = OrdinalEncoder()
-    df[cat_columns] = ordinal.fit_transform(df[cat_columns])
-    
-    # Сохранение обработанных данных
-    os.makedirs("data/processed", exist_ok=True)
-    df.to_csv('data/processed/cars_processed.csv', index=False)
-    
-    # Сохранение кодировщика
-    joblib.dump(ordinal, 'models/ordinal_encoder.joblib')
-    
-    return True
+    Returns:
+        bool: True если обработка прошла успешно
+    """
+    try:
+        logging.info("Начало обработки данных...")
+        df = pd.read_csv(path2df)
+        
+        # Определение столбцов
+        cat_columns = ['Make', 'Model', 'Style', 'Fuel_type', 'Transmission']
+        num_columns = ['Year', 'Distance', 'Engine_capacity(cm3)', 'Price(euro)']
+        
+        # Применение правил очистки данных
+        cleaning_rules = [
+            ((df.Year < 2021) & (df.Distance < 1100), "Удаление машин с подозрительно низким пробегом для их возраста"),
+            (df.Distance > 1e6, "Удаление машин с чрезмерно высоким пробегом (>1,000,000 км)"),
+            (df["Engine_capacity(cm3)"] < 200, "Удаление машин с объемом двигателя <200 см³"),
+            (df["Engine_capacity(cm3)"] > 5000, "Удаление машин с объемом двигателя >5000 см³"),
+            (df["Price(euro)"] < 101, "Удаление машин с ценой <101 евро"),
+            (df["Price(euro)"] > 1e5, "Удаление машин с ценой >100,000 евро"),
+            (df.Year < 1971, "Удаление машин старше 1971 года")
+        ]
+        
+        initial_count = len(df)
+        for condition, description in cleaning_rules:
+            rows_to_drop = df[condition]
+            if not rows_to_drop.empty:
+                logging.info(f"{description}: удалено {len(rows_to_drop)} записей")
+                df = df.drop(rows_to_drop.index)
+        
+        # Кодирование категориальных переменных
+        logging.info("Кодирование категориальных переменных...")
+        encoder = OrdinalEncoder()
+        df[cat_columns] = encoder.fit_transform(df[cat_columns])
+        
+        # Сохранение обработанных данных
+        df.to_csv('df_clean.csv', index=False)
+        final_count = len(df)
+        logging.info(f"Обработка завершена. Исходно: {initial_count} записей, после очистки: {final_count} записей")
+        
+        return True
+    except Exception as e:
+        logging.error(f"Ошибка при обработке данных: {str(e)}")
+        raise
 
 if __name__ == "__main__":
-    os.makedirs("data/raw", exist_ok=True)
-    os.makedirs("models", exist_ok=True)
-    download_data()
-    clear_data("data/raw/cars.csv")
+    configure_logging()
+    try:
+        # Загрузка и обработка данных
+        download_data()
+        clean_data("cars.csv")
+        logging.info("Все этапы обработки данных успешно завершены!")
+    except Exception as e:
+        logging.critical(f"Критическая ошибка в процессе выполнения: {str(e)}")
+        sys.exit(1)
