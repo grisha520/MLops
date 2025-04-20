@@ -46,7 +46,7 @@ if __name__ == "__main__":
         logging.info("Starting model training process...")
         
         # Загрузка данных
-        df = pd.read_csv("./df_clear.csv")
+        df = pd.read_csv("./df_clean.csv")
         logging.info(f"Loaded data with shape: {df.shape}")
         
         # Масштабирование данных
