@@ -1,6 +1,6 @@
 import os
-import pandas as pd
 from sklearn.preprocessing import StandardScaler, PowerTransformer
+import pandas as pd
 from sklearn.model_selection import train_test_split
 import mlflow
 from sklearn.linear_model import SGDRegressor
@@ -9,86 +9,120 @@ import numpy as np
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from mlflow.models import infer_signature
 import joblib
+import logging
 
-def scale_data(X, y):
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filename='train_model.log'
+)
+
+def scale_frame(frame):
+    """Масштабирование данных"""
+    df = frame.copy()
+    X, y = df.drop(columns=['Price(euro)']), df['Price(euro)']
     scaler = StandardScaler()
     power_trans = PowerTransformer()
-    X_scaled = scaler.fit_transform(X)
-    y_scaled = power_trans.fit_transform(y.values.reshape(-1, 1))
-    return X_scaled, y_scaled, scaler, power_trans
+    X_scale = scaler.fit_transform(X.values)
+    y_scale = power_trans.fit_transform(y.values.reshape(-1,1))
+    return X_scale, y_scale, power_trans, scaler
 
 def eval_metrics(actual, pred):
+    """Вычисление метрик качества модели"""
     rmse = np.sqrt(mean_squared_error(actual, pred))
     mae = mean_absolute_error(actual, pred)
     r2 = r2_score(actual, pred)
     return rmse, mae, r2
 
+def save_best_model_path(path):
+    """Сохранение пути к лучшей модели в файл"""
+    with open("best_model.txt", "w") as f:
+        f.write(path)
+    logging.info(f"Saved best model path to best_model.txt: {path}")
+
 if __name__ == "__main__":
-    # Создание директорий
-    os.makedirs("models", exist_ok=True)
-    
-    # Загрузка данных
-    df = pd.read_csv("data/processed/cars_processed.csv")
-    X = df.drop(columns=['Price(euro)'])
-    y = df['Price(euro)']
-    
-    # Масштабирование данных
-    X_scaled, y_scaled, scaler, power_trans = scale_data(X, y)
-    
-    # Разделение данных
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_scaled, y_scaled, test_size=0.3, random_state=42
-    )
-    
-    # Параметры для GridSearch
-    params = {
-        'alpha': [0.0001, 0.001, 0.01, 0.05, 0.1],
-        'l1_ratio': [0.001, 0.05, 0.01, 0.2],
-        "penalty": ["l1", "l2", "elasticnet"],
-        "loss": ['squared_error', 'huber', 'epsilon_insensitive'],
-        "fit_intercept": [False, True],
-    }
-    
-    # Настройка MLflow
-    mlflow.set_tracking_uri("http://localhost:5000")
-    mlflow.set_experiment("cars_price_prediction")
-    
-    with mlflow.start_run():
-        # Обучение модели
-        lr = SGDRegressor(random_state=42)
-        clf = GridSearchCV(lr, params, cv=3, n_jobs=4)
-        clf.fit(X_train, y_train.ravel())
-        best_model = clf.best_estimator_
+    try:
+        logging.info("Starting model training process...")
         
-        # Предсказание и оценка
-        y_pred = best_model.predict(X_val)
-        y_price_pred = power_trans.inverse_transform(y_pred.reshape(-1, 1))
-        y_val_actual = power_trans.inverse_transform(y_val)
+        # Загрузка данных
+        df = pd.read_csv("./df_clear.csv")
+        logging.info(f"Loaded data with shape: {df.shape}")
         
-        rmse, mae, r2 = eval_metrics(y_val_actual, y_price_pred)
-        
-        # Логирование параметров и метрик
-        mlflow.log_params(best_model.get_params())
-        mlflow.log_metrics({
-            "rmse": rmse,
-            "mae": mae,
-            "r2": r2
-        })
-        
-        # Логирование модели
-        signature = infer_signature(X_train, best_model.predict(X_train))
-        mlflow.sklearn.log_model(
-            sk_model=best_model,
-            artifact_path="model",
-            signature=signature,
-            registered_model_name="cars_price_predictor"
+        # Масштабирование данных
+        X, y, power_trans, scaler = scale_frame(df)
+        X_train, X_val, y_train, y_val = train_test_split(
+            X, y, test_size=0.3, random_state=42
         )
         
-        # Сохранение дополнительных артефактов
-        joblib.dump(scaler, "models/scaler.joblib")
-        joblib.dump(power_trans, "models/power_transformer.joblib")
+        # Параметры для GridSearch
+        params = {
+            'alpha': [0.0001, 0.001, 0.01, 0.05, 0.1],
+            'l1_ratio': [0.001, 0.05, 0.01, 0.2],
+            "penalty": ["l1", "l2", "elasticnet"],
+            "loss": ['squared_error', 'huber', 'epsilon_insensitive'],
+            "fit_intercept": [False, True],
+        }
+        
+        # Настройка MLflow
+        mlflow.set_tracking_uri("http://localhost:5000")
+        mlflow.set_experiment("linear_model_cars")
+        
+        with mlflow.start_run() as run:
+            logging.info("MLflow run started")
+            
+            # Обучение модели
+            lr = SGDRegressor(random_state=42)
+            clf = GridSearchCV(lr, params, cv=3, n_jobs=4)
+            clf.fit(X_train, y_train.reshape(-1))
+            
+            # Получение лучшей модели
+            best = clf.best_estimator_
+            logging.info(f"Best model parameters: {best.get_params()}")
+            
+            # Предсказание и оценка
+            y_pred = best.predict(X_val)
+            y_price_pred = power_trans.inverse_transform(y_pred.reshape(-1,1))
+            rmse, mae, r2 = eval_metrics(
+                power_trans.inverse_transform(y_val), 
+                y_price_pred
+            )
+            
+            # Логирование параметров
+            mlflow.log_params(best.get_params())
+            
+            # Логирование метрик
+            mlflow.log_metrics({
+                "rmse": rmse,
+                "mae": mae,
+                "r2": r2
+            })
+            
+            # Логирование модели
+            signature = infer_signature(X_train, best.predict(X_train))
+            mlflow.sklearn.log_model(best, "model", signature=signature)
+            
+            # Сохранение модели
+            model_path = "lr_cars_model.pkl"
+            joblib.dump({
+                'model': best,
+                'scaler': scaler,
+                'power_trans': power_trans
+            }, model_path)
+            mlflow.log_artifact(model_path)
+            
+            logging.info(f"Model training completed with R2: {r2:.4f}")
+        
+        # Получение пути к лучшей модели
+        df_runs = mlflow.search_runs()
+        best_run = df_runs.sort_values("metrics.r2", ascending=False).iloc[0]
+        best_model_path = best_run['artifact_uri'].replace("file://", "") + "/model"
         
         # Сохранение пути к лучшей модели
-        model_uri = mlflow.get_artifact_uri("model")
-        with open("models/best_model.txt", "w") as f:
-            f.write(model_uri)
+        save_best_model_path(best_model_path)
+        
+        logging.info("Training process completed successfully!")
+        
+    except Exception as e:
+        logging.error(f"Error during model training: {str(e)}")
+        raise
